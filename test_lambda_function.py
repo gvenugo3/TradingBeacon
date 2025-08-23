@@ -2,10 +2,11 @@ import pytest
 import json
 import os
 from unittest.mock import Mock, patch, MagicMock, mock_open
-import responses
 from moto import mock_sns
 import boto3
-from datetime import datetime
+from datetime import datetime, date
+import pandas as pd
+import numpy as np
 
 # Import the module to test
 import lambda_function
@@ -17,12 +18,10 @@ class TestStockEMAMonitor:
     def setup_method(self):
         """Set up test fixtures"""
         self.monitor = StockEMAMonitor()
-        self.monitor.alpha_vantage_api_key = "test_api_key"
         
     def test_init(self):
         """Test StockEMAMonitor initialization"""
         monitor = StockEMAMonitor()
-        assert monitor.alpha_vantage_api_key is None
         assert monitor.sns_client is not None
         
     def test_calculate_ema_insufficient_data(self):
@@ -57,127 +56,67 @@ class TestStockEMAMonitor:
         assert result_30 is not None
         assert result_20 != result_30
         
-    @responses.activate
-    def test_fetch_stock_data_success(self):
-        """Test successful stock data fetching"""
-        # Mock API response
-        mock_response = {
-            "Meta Data": {
-                "1. Information": "Daily Prices",
-                "2. Symbol": "AAPL",
-                "3. Last Refreshed": "2025-01-15"
-            },
-            "Time Series (Daily)": {
-                "2025-01-15": {
-                    "1. open": "150.00",
-                    "2. high": "152.00",
-                    "3. low": "149.00",
-                    "4. close": "151.50",
-                    "5. volume": "1000000"
-                },
-                "2025-01-14": {
-                    "1. open": "148.00",
-                    "2. high": "150.00",
-                    "3. low": "147.00",
-                    "4. close": "150.00",
-                    "5. volume": "900000"
-                }
-            }
-        }
+    @patch('yfinance.Ticker')
+    def test_fetch_stock_data_success(self, mock_ticker):
+        """Test successful stock data fetching with Yahoo Finance"""
+        # Create mock data
+        dates = pd.date_range('2024-01-01', periods=250, freq='D')
+        mock_hist = pd.DataFrame({
+            'Close': [150.0 + i * 0.1 for i in range(250)]
+        }, index=dates)
         
-        responses.add(
-            responses.GET,
-            "https://www.alphavantage.co/query",
-            json=mock_response,
-            status=200
-        )
+        mock_ticker_instance = Mock()
+        mock_ticker_instance.history.return_value = mock_hist
+        mock_ticker.return_value = mock_ticker_instance
         
         result = self.monitor.fetch_stock_data("AAPL")
         
         assert result is not None
         assert result["symbol"] == "AAPL"
-        assert result["current_price"] == 151.50
-        assert len(result["prices"]) == 2
-        assert result["prices"][0] == 151.50  # Most recent first
-        assert result["prices"][1] == 150.00
-        assert result["last_updated"] == "2025-01-15"
+        assert isinstance(result["current_price"], float)
+        assert len(result["prices"]) == 250
+        assert result["prices"][0] > result["prices"][-1]  # Most recent first
+        assert isinstance(result["last_updated"], str)
         
-    @responses.activate
-    def test_fetch_stock_data_api_error(self):
-        """Test handling of API error response"""
-        mock_response = {
-            "Error Message": "Invalid API call"
-        }
+        mock_ticker.assert_called_once_with("AAPL")
+        mock_ticker_instance.history.assert_called_once_with(period="1y")
         
-        responses.add(
-            responses.GET,
-            "https://www.alphavantage.co/query",
-            json=mock_response,
-            status=200
-        )
+    @patch('yfinance.Ticker')
+    def test_fetch_stock_data_empty_data(self, mock_ticker):
+        """Test handling of empty data from Yahoo Finance"""
+        mock_ticker_instance = Mock()
+        mock_ticker_instance.history.return_value = pd.DataFrame()  # Empty DataFrame
+        mock_ticker.return_value = mock_ticker_instance
         
         result = self.monitor.fetch_stock_data("INVALID")
+        
         assert result is None
         
-    @responses.activate
-    def test_fetch_stock_data_rate_limit(self):
-        """Test handling of rate limit response"""
-        mock_response = {
-            "Note": "Thank you for using Alpha Vantage! Our standard API call frequency is 5 calls per minute"
-        }
-        
-        responses.add(
-            responses.GET,
-            "https://www.alphavantage.co/query",
-            json=mock_response,
-            status=200
-        )
+    @patch('yfinance.Ticker')
+    def test_fetch_stock_data_exception(self, mock_ticker):
+        """Test handling of Yahoo Finance exceptions"""
+        mock_ticker_instance = Mock()
+        mock_ticker_instance.history.side_effect = Exception("Network error")
+        mock_ticker.return_value = mock_ticker_instance
         
         result = self.monitor.fetch_stock_data("AAPL")
+        
         assert result is None
         
-    @responses.activate
-    def test_fetch_stock_data_no_time_series(self):
-        """Test handling of response without time series data"""
-        mock_response = {
-            "Meta Data": {
-                "1. Information": "Daily Prices",
-                "2. Symbol": "AAPL"
-            }
-        }
+    @patch('yfinance.Ticker')
+    def test_fetch_stock_data_no_close_prices(self, mock_ticker):
+        """Test handling of data without close prices"""
+        dates = pd.date_range('2024-01-01', periods=10, freq='D')
+        mock_hist = pd.DataFrame({
+            'Close': [np.nan] * 10  # All NaN values
+        }, index=dates)
         
-        responses.add(
-            responses.GET,
-            "https://www.alphavantage.co/query",
-            json=mock_response,
-            status=200
-        )
+        mock_ticker_instance = Mock()
+        mock_ticker_instance.history.return_value = mock_hist
+        mock_ticker.return_value = mock_ticker_instance
         
         result = self.monitor.fetch_stock_data("AAPL")
-        assert result is None
         
-    @responses.activate
-    def test_fetch_stock_data_http_error(self):
-        """Test handling of HTTP error"""
-        responses.add(
-            responses.GET,
-            "https://www.alphavantage.co/query",
-            status=500
-        )
-        
-        result = self.monitor.fetch_stock_data("AAPL")
-        assert result is None
-        
-    @responses.activate
-    def test_fetch_stock_data_timeout(self):
-        """Test handling of request timeout"""
-        responses.add(
-            responses.GET,
-            "https://www.alphavantage.co/query",
-            body=responses.ConnectionError("Timeout")
-        )
-        
-        result = self.monitor.fetch_stock_data("AAPL")
         assert result is None
         
     def test_check_ema_proximity_near_above(self):
@@ -412,7 +351,6 @@ class TestStockEMAMonitor:
 
 class TestLambdaHandler:
     
-    @patch.dict(os.environ, {"ALPHA_VANTAGE_API_KEY": "test_key", "SNS_TOPIC_ARN": "test_arn"})
     @patch('lambda_function.StockEMAMonitor.monitor_stocks')
     def test_lambda_handler_success(self, mock_monitor_stocks):
         """Test successful Lambda handler execution"""
@@ -432,16 +370,6 @@ class TestLambdaHandler:
         assert body["results"]["alerts_sent"] == 2
         assert body["results"]["stocks_processed"] == 5
         
-    def test_lambda_handler_missing_api_key(self):
-        """Test Lambda handler with missing API key"""
-        with patch.dict(os.environ, {}, clear=True):
-            result = lambda_handler({}, {})
-            
-        assert result["statusCode"] == 400
-        body = json.loads(result["body"])
-        assert "ALPHA_VANTAGE_API_KEY environment variable not set" in body["error"]
-        
-    @patch.dict(os.environ, {"ALPHA_VANTAGE_API_KEY": "test_key"})
     @patch('lambda_function.StockEMAMonitor.monitor_stocks')
     def test_lambda_handler_monitoring_exception(self, mock_monitor_stocks):
         """Test Lambda handler when monitoring raises exception"""
@@ -453,10 +381,10 @@ class TestLambdaHandler:
         body = json.loads(result["body"])
         assert "Monitoring failed" in body["error"]
         
-    @patch.dict(os.environ, {"ALPHA_VANTAGE_API_KEY": "test_key"})
+    @patch.dict(os.environ, {"SNS_TOPIC_ARN": "test_arn"})
     @patch('lambda_function.StockEMAMonitor')
-    def test_lambda_handler_api_key_assignment(self, mock_monitor_class):
-        """Test that API key is properly assigned to monitor instance"""
+    def test_lambda_handler_with_sns_topic(self, mock_monitor_class):
+        """Test Lambda handler with SNS topic configured"""
         mock_monitor_instance = Mock()
         mock_monitor_class.return_value = mock_monitor_instance
         mock_monitor_instance.monitor_stocks.return_value = {
@@ -469,8 +397,7 @@ class TestLambdaHandler:
         
         lambda_handler({}, {})
         
-        assert mock_monitor_instance.alpha_vantage_api_key == "test_key"
-        mock_monitor_instance.monitor_stocks.assert_called_once_with(None)
+        mock_monitor_instance.monitor_stocks.assert_called_once_with("test_arn")
 
 
 if __name__ == "__main__":

@@ -1,9 +1,9 @@
 import json
-import requests
 import boto3
 from datetime import datetime
 from typing import List, Dict, Optional
 import logging
+import requests
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -11,7 +11,6 @@ logger.setLevel(logging.INFO)
 class StockEMAMonitor:
     def __init__(self):
         self.sns_client = boto3.client('sns')
-        self.alpha_vantage_api_key = None  # Set via environment variable
         
     def calculate_ema(self, prices: List[float], period: int = 200) -> Optional[float]:
         """Calculate Exponential Moving Average"""
@@ -31,50 +30,56 @@ class StockEMAMonitor:
         return ema
     
     def fetch_stock_data(self, symbol: str) -> Optional[Dict]:
-        """Fetch daily stock data from Alpha Vantage API"""
+        """Fetch stock data using simple Yahoo Finance URL approach"""
         try:
-            url = f'https://www.alphavantage.co/query'
+            logger.info(f"Fetching data for {symbol} from Yahoo Finance")
+            
+            # Use Yahoo Finance query API (simpler approach)
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+            
             params = {
-                'function': 'TIME_SERIES_DAILY',
-                'symbol': symbol,
-                'outputsize': 'full',
-                'apikey': self.alpha_vantage_api_key
+                'range': '1y',
+                'interval': '1d',
+                'includePrePost': 'false',
+                'events': 'div%2Csplit'
             }
             
-            response = requests.get(url, params=params, timeout=30)
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            response = requests.get(url, params=params, headers=headers, timeout=30)
             response.raise_for_status()
+            
             data = response.json()
             
-            if 'Error Message' in data:
-                logger.error(f"API Error for {symbol}: {data['Error Message']}")
+            if not data.get('chart', {}).get('result'):
+                logger.error(f"No data found for {symbol}")
                 return None
                 
-            if 'Note' in data:
-                logger.warning(f"API Rate limit reached: {data['Note']}")
+            chart_data = data['chart']['result'][0]
+            
+            if not chart_data.get('indicators', {}).get('quote'):
+                logger.error(f"No price data for {symbol}")
                 return None
                 
-            time_series = data.get('Time Series (Daily)', {})
-            if not time_series:
-                logger.error(f"No time series data found for {symbol}")
+            close_prices = chart_data['indicators']['quote'][0]['close']
+            
+            # Filter out None values and reverse to get most recent first
+            prices = [float(p) for p in close_prices if p is not None]
+            if len(prices) == 0:
+                logger.error(f"No valid price data for {symbol}")
                 return None
                 
-            # Convert to list of closing prices (most recent first)
-            sorted_dates = sorted(time_series.keys(), reverse=True)
-            prices = []
-            for date in sorted_dates:
-                close_price = float(time_series[date]['4. close'])
-                prices.append(close_price)
-                
+            prices.reverse()  # Most recent first
+            
             return {
                 'symbol': symbol,
                 'current_price': prices[0],
                 'prices': prices[:250],  # Get last 250 days to ensure we have enough for 200 EMA
-                'last_updated': sorted_dates[0]
+                'last_updated': datetime.now().strftime('%Y-%m-%d')
             }
             
-        except requests.RequestException as e:
-            logger.error(f"Network error fetching data for {symbol}: {str(e)}")
-            return None
         except Exception as e:
             logger.error(f"Error fetching data for {symbol}: {str(e)}")
             return None
@@ -190,18 +195,10 @@ def lambda_handler(event, context):
     try:
         # Get environment variables
         import os
-        alpha_vantage_key = os.environ.get('ALPHA_VANTAGE_API_KEY')
         sns_topic_arn = os.environ.get('SNS_TOPIC_ARN')
-        
-        if not alpha_vantage_key:
-            return {
-                'statusCode': 400,
-                'body': json.dumps({'error': 'ALPHA_VANTAGE_API_KEY environment variable not set'})
-            }
         
         # Initialize monitor
         monitor = StockEMAMonitor()
-        monitor.alpha_vantage_api_key = alpha_vantage_key
         
         # Run monitoring
         results = monitor.monitor_stocks(sns_topic_arn)
@@ -226,8 +223,7 @@ def lambda_handler(event, context):
 if __name__ == "__main__":
     # For local testing
     import os
-    os.environ['ALPHA_VANTAGE_API_KEY'] = 'your_api_key_here'
-    os.environ['SNS_TOPIC_ARN'] = 'your_sns_topic_arn_here'
+    os.environ['SNS_TOPIC_ARN'] = 'your_sns_topic_arn_here'  # Optional for testing
     
     result = lambda_handler({}, {})
     print(json.dumps(result, indent=2))

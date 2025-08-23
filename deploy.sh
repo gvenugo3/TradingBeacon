@@ -10,15 +10,14 @@ REGION="us-west-1"
 ROLE_NAME="stock-monitor-lambda-role"
 ZIP_FILE="stock-monitor-deployment.zip"
 
-# Check if required parameters are provided
-if [ $# -lt 1 ]; then
-    echo "Usage: $0 <ALPHA_VANTAGE_API_KEY> [SNS_TOPIC_ARN]"
-    echo "Example: $0 YOUR_API_KEY_HERE arn:aws:sns:us-west-1:123456789:stock-alerts"
-    exit 1
-fi
+# Check if SNS topic ARN is provided (optional)
+SNS_TOPIC_ARN=${1:-}
 
-ALPHA_VANTAGE_KEY=$1
-SNS_TOPIC_ARN=${2:-}
+if [ ! -z "$SNS_TOPIC_ARN" ]; then
+    echo "📧 SNS notifications will be sent to: $SNS_TOPIC_ARN"
+else
+    echo "📧 No SNS topic provided - notifications disabled"
+fi
 
 echo "🚀 Deploying Stock EMA Monitor to AWS Lambda..."
 echo "📋 Function: $FUNCTION_NAME"
@@ -80,22 +79,19 @@ rm -rf package/
 # Create package directory
 mkdir -p package
 
-# Install dependencies with better error handling
-echo "📥 Installing dependencies..."
-pip install requests boto3 -t package/ --no-deps --quiet
-
-# Install specific compatible versions
-pip install \
-    botocore==1.31.85 \
-    jmespath==1.0.1 \
-    python-dateutil==2.9.0.post0 \
-    s3transfer==0.6.2 \
-    urllib3==2.0.7 \
-    certifi==2025.8.3 \
-    charset-normalizer==3.4.3 \
-    idna==3.10 \
-    six==1.17.0 \
-    -t package/ --no-deps --quiet
+# Install minimal dependencies
+echo "📥 Installing minimal dependencies..."
+pip install --target package/ --no-deps boto3==1.28.25
+pip install --target package/ --no-deps botocore==1.31.85
+pip install --target package/ --no-deps requests==2.31.0
+pip install --target package/ --no-deps urllib3==1.26.16
+pip install --target package/ --no-deps certifi==2023.7.22
+pip install --target package/ --no-deps charset-normalizer==3.2.0
+pip install --target package/ --no-deps idna==3.4
+pip install --target package/ --no-deps jmespath==1.0.1
+pip install --target package/ --no-deps s3transfer==0.6.2
+pip install --target package/ --no-deps python-dateutil==2.8.2
+pip install --target package/ --no-deps six==1.16.0
 
 # Copy source files
 cp lambda_function.py package/
@@ -133,18 +129,26 @@ else
         --region $REGION >/dev/null
 fi
 
-# Update environment variables
-echo "🔧 Setting environment variables..."
-ENV_VARS="ALPHA_VANTAGE_API_KEY=$ALPHA_VANTAGE_KEY"
+# Update environment variables (only SNS topic if provided)
 if [ ! -z "$SNS_TOPIC_ARN" ]; then
-    ENV_VARS="$ENV_VARS,SNS_TOPIC_ARN=$SNS_TOPIC_ARN"
+    echo "🔧 Setting SNS topic environment variable..."
+    aws lambda update-function-configuration \
+        --function-name $FUNCTION_NAME \
+        --environment "Variables={SNS_TOPIC_ARN=$SNS_TOPIC_ARN}" \
+        --region $REGION >/dev/null
     echo "📧 SNS notifications: $SNS_TOPIC_ARN"
+else
+    echo "🔧 No environment variables to set (Yahoo Finance needs no API key!)"
 fi
 
-aws lambda update-function-configuration \
-    --function-name $FUNCTION_NAME \
-    --environment "Variables={$ENV_VARS}" \
-    --region $REGION >/dev/null
+# Remove unnecessary files to reduce size
+echo "🧹 Optimizing package size..."
+cd package
+find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+find . -type d -name "*.dist-info" -exec rm -rf {} + 2>/dev/null || true
+find . -name "*.pyc" -delete 2>/dev/null || true
+find . -name "*.pyo" -delete 2>/dev/null || true
+cd ..
 
 echo "✅ Lambda function deployed successfully!"
 
