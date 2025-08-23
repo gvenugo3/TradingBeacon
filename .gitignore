@@ -27,6 +27,8 @@ MANIFEST
 .pytest_cache/
 htmlcov/
 .tox/
+test-output.json
+output.json
 
 # Environment variables and secrets
 .env
@@ -37,8 +39,13 @@ htmlcov/
 
 # AWS deployment artifacts
 *.zip
-deployment.zip
-stock-monitor-deployment.zip
+deployment*.zip
+package/
+lambda-trust-policy.json
+
+# Temporary files
+/tmp/
+temp/
 
 # IDE
 .vscode/

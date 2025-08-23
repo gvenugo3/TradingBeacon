@@ -1,9 +1,7 @@
 import json
 import requests
 import boto3
-from datetime import datetime, timedelta
-import pandas as pd
-import numpy as np
+from datetime import datetime
 from typing import List, Dict, Optional
 import logging
 
@@ -20,15 +18,14 @@ class StockEMAMonitor:
         if len(prices) < period:
             return None
             
-        prices_array = np.array(prices)
         alpha = 2 / (period + 1)
         
         # Initialize EMA with SMA of first 'period' values
-        sma = np.mean(prices_array[:period])
+        sma = sum(prices[:period]) / period
         ema = sma
         
         # Calculate EMA for remaining values
-        for price in prices_array[period:]:
+        for price in prices[period:]:
             ema = alpha * price + (1 - alpha) * ema
             
         return ema
