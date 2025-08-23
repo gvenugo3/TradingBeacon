@@ -120,12 +120,12 @@ else
     echo "🆕 Creating new Lambda function..."
     aws lambda create-function \
         --function-name $FUNCTION_NAME \
-        --runtime python3.9 \
+        --runtime python3.11 \
         --role $ROLE_ARN \
         --handler lambda_function.lambda_handler \
         --zip-file fileb://$ZIP_FILE \
         --timeout 300 \
-        --memory-size 256 \
+        --memory-size 512 \
         --region $REGION >/dev/null
 fi
 
