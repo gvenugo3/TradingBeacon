@@ -85,11 +85,20 @@ class StockEMAMonitor:
             return None
     
     def check_ema_proximity(self, symbol: str, current_price: float, ema_200: float, threshold_pct: float = 2.0) -> Dict:
-        """Check if stock price is near 200 EMA"""
+        """Check if stock price meets alert criteria:
+        - Above EMA: Alert if within threshold_pct% above
+        - Below EMA: Alert for ANY price below EMA
+        """
         percentage_diff = abs((current_price - ema_200) / ema_200) * 100
-        is_near_ema = percentage_diff <= threshold_pct
-        
         direction = "above" if current_price > ema_200 else "below"
+        
+        # Alert logic: 5% above EMA OR any value below EMA
+        if current_price > ema_200:
+            # Above EMA: only alert if within threshold
+            is_near_ema = percentage_diff <= threshold_pct
+        else:
+            # Below EMA: always alert
+            is_near_ema = True
         
         return {
             'symbol': symbol,
